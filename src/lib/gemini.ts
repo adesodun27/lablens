@@ -1,12 +1,13 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import type { Explanation, Extraction, FlaggedTest, Language } from "./types";
 import { LANGUAGES } from "./types";
 
 const MODELS = [
   process.env.GEMINI_MODEL,
+  "gemini-3.8-flash",
   "gemini-flash-latest",
-  "gemini-2.5-flash",
-].filter(Boolean) as string[];
+  "gemini-flash-lite-latest",
+].filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -16,31 +17,81 @@ function client() {
 
 type Part = { text: string } | { inlineData: { mimeType: string; data: string } };
 
-async function generateJson<T>(parts: Part[], schema: object, system: string): Promise<T> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Model doesn't exist for this key -> skip straight to the next model
+const MISSING = /not found|404|is not supported|no longer available/i;
+// Busy / transient -> retry once, then fall back to the next model
+const BUSY = /503|500|UNAVAILABLE|overloaded|high demand|INTERNAL|deadline|timed? ?out|abort/i;
+
+/**
+ * Every request gets a hard time budget so we always answer the browser
+ * with clean JSON before Vercel kills the function.
+ */
+export class Budget {
+  private end: number;
+  constructor(ms: number) {
+    this.end = Date.now() + ms;
+  }
+  left() {
+    return this.end - Date.now();
+  }
+}
+
+export class BusyError extends Error {
+  constructor() {
+    super("AI busy (503)");
+  }
+}
+
+async function generateJson<T>(
+  parts: Part[],
+  schema: object,
+  system: string,
+  budget: Budget,
+): Promise<T> {
   const ai = client();
   let lastErr: unknown;
   for (const model of MODELS) {
-    try {
-      const res = await ai.models.generateContent({
-        model,
-        contents: [{ role: "user", parts }],
-        config: {
-          systemInstruction: system,
-          responseMimeType: "application/json",
-          responseJsonSchema: schema,
-          temperature: 0.2,
-        },
-      });
-      const text = res.text;
-      if (!text) throw new Error("Empty response from model");
-      return JSON.parse(text) as T;
-    } catch (err) {
-      lastErr = err;
-      const msg = String((err as Error)?.message ?? err);
-      // Only fall through to the next model if this one doesn't exist
-      if (!/not found|404|is not supported/i.test(msg)) throw err;
+    let useThinking = true;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Need at least ~8s to make a call worth trying
+      if (budget.left() < 8000) throw new BusyError();
+      try {
+        const res = await ai.models.generateContent({
+          model,
+          contents: [{ role: "user", parts }],
+          config: {
+            systemInstruction: system,
+            responseMimeType: "application/json",
+            responseJsonSchema: schema,
+            temperature: 0.2,
+            // Low thinking = much faster; this is reading + plain explaining
+            ...(useThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+            abortSignal: AbortSignal.timeout(Math.min(budget.left() - 2000, 45000)),
+          },
+        });
+        const text = res.text;
+        if (!text) throw new Error("Empty response from model (503)");
+        return JSON.parse(text) as T;
+      } catch (err) {
+        lastErr = err;
+        const msg = String((err as Error)?.message ?? err);
+        if (MISSING.test(msg)) break; // next model
+        if (useThinking && /thinking/i.test(msg)) {
+          useThinking = false; // model doesn't support thinkingLevel; retry without
+          attempt--;
+          continue;
+        }
+        if (err instanceof SyntaxError || BUSY.test(msg)) {
+          if (attempt === 0) await sleep(1000);
+          continue; // retry once, then next model
+        }
+        throw err; // bad key, bad request, etc.
+      }
     }
   }
+  if (lastErr && BUSY.test(String((lastErr as Error)?.message ?? lastErr))) throw new BusyError();
   throw lastErr;
 }
 
@@ -82,12 +133,15 @@ const EXTRACT_SCHEMA = {
   required: ["isLabReport", "reportType", "tests"],
 };
 
-export async function extractReport(files: { mimeType: string; data: string }[]): Promise<Extraction> {
+export async function extractReport(
+  files: { mimeType: string; data: string }[],
+  budget: Budget,
+): Promise<Extraction> {
   const parts: Part[] = [
     ...files.map((f) => ({ inlineData: f })),
     { text: "Extract every test result from this lab report." },
   ];
-  const out = await generateJson<Extraction>(parts, EXTRACT_SCHEMA, EXTRACT_SYSTEM);
+  const out = await generateJson<Extraction>(parts, EXTRACT_SCHEMA, EXTRACT_SYSTEM, budget);
   return { ...out, tests: Array.isArray(out.tests) ? out.tests : [] };
 }
 
@@ -140,6 +194,7 @@ export async function explainResults(
   reportType: string,
   tests: FlaggedTest[],
   language: Language,
+  budget: Budget,
 ): Promise<Explanation> {
   const payload = tests.map((t) => ({
     id: t.id,
@@ -153,5 +208,5 @@ export async function explainResults(
   const parts: Part[] = [
     { text: `Report type: ${reportType}\nResults:\n${JSON.stringify(payload, null, 2)}` },
   ];
-  return generateJson<Explanation>(parts, EXPLAIN_SCHEMA, explainSystem(language));
+  return generateJson<Explanation>(parts, EXPLAIN_SCHEMA, explainSystem(language), budget);
 }

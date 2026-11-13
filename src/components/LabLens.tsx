@@ -22,6 +22,27 @@ const STATUS_STYLE: Record<Status, { label: string; chip: string }> = {
 
 /* ---------- helpers ---------- */
 
+async function postAnalyze(fd: FormData): Promise<AnalyzeResponse> {
+  let res: Response;
+  try {
+    res = await fetch("/api/analyze", { method: "POST", body: fd });
+  } catch {
+    throw new Error("No internet connection. Check your data and try again.");
+  }
+  const raw = await res.text();
+  let data: { error?: string } & Partial<AnalyzeResponse>;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // Platform error page (timeout, file too large, etc.) instead of our JSON
+    if (res.status === 413) throw new Error("That file is too large. Try a smaller, clearer photo.");
+    if (res.status === 504) throw new Error("That took too long. Please try again.");
+    throw new Error("Something went wrong. Please try again in a minute.");
+  }
+  if (!res.ok) throw new Error(data.error ?? "Something went wrong. Please try again.");
+  return data as AnalyzeResponse;
+}
+
 async function compress(file: File): Promise<File> {
   if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
   try {
@@ -87,10 +108,7 @@ export default function LabLens() {
       const ready = await Promise.all(input.map(compress));
       ready.forEach((f) => fd.append("files", f));
       fd.append("language", lang);
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
-      setResult(data);
+      setResult(await postAnalyze(fd));
       setStage("result");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
@@ -108,10 +126,7 @@ export default function LabLens() {
       const fd = new FormData();
       fd.append("language", lang);
       fd.append("extraction", JSON.stringify(result.extraction));
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
-      setResult(data);
+      setResult(await postAnalyze(fd));
     } catch (e) {
       setError((e as Error).message);
     } finally {
