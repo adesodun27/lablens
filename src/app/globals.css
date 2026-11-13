@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-paper: #f6f3ec;
+  --color-card: #fffdf8;
+  --color-ink: #16201c;
+  --color-muted: #5d6762;
+  --color-line: #e3ddd0;
+  --color-brand: #0e5a46;
+  --color-brand-soft: #dceee6;
+  --color-low: #9a5b00;
+  --color-low-soft: #fbefd9;
+  --color-high: #a3401c;
+  --color-high-soft: #fbe5dc;
+  --color-urgent: #b4231f;
+  --color-urgent-soft: #fde4e2;
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display-serif), ui-serif, Georgia, serif;
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+.range-track {
+  background: linear-gradient(
+    to right,
+    var(--color-low-soft) 0%,
+    var(--color-low-soft) 25%,
+    var(--color-brand-soft) 25%,
+    var(--color-brand-soft) 75%,
+    var(--color-high-soft) 75%,
+    var(--color-high-soft) 100%
+  );
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+.pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot { animation: none; }
+}
