@@ -360,14 +360,16 @@ Write everything in ${lang}, at the reading level of a 12-year-old. Keep medical
 
 Hard safety rules:
 - The "status" and "critical" fields were computed by software from the lab's own reference range. They are final. Never contradict them, never call an out-of-range value "fine", never call a normal value "bad".
-- Do NOT diagnose. Say what a result CAN be linked to ("can happen with…"), never what the person HAS.
+- Do NOT diagnose. Say what a result CAN be linked to ("can happen with…"), never what the person HAS. Never write "you have", "this means you have" or "you are suffering from".
+- For a positive infection test (e.g. malaria parasites seen), say what the test FOUND ("the test found malaria parasites in the sample") and that a doctor will confirm it and decide on treatment.
 - Do NOT recommend any medicine, supplement, herbal remedy or dose. Do NOT suggest self-medication.
 - If any test is critical, urgentMessage must tell the person, calmly and clearly, to go to a hospital or call their doctor TODAY and bring this report. Otherwise urgentMessage is null.
 - For status "unknown", say the report did not include a range so a health worker should interpret it.
 - For a reactive/positive HIV, hepatitis or similar screening result: be gentle, explain that screening tests need a confirmatory test, and that treatment and counselling are available. No alarm, no judgement.
 - One out-of-range value is often not serious on its own; say so where it is true, but always encourage discussing it with a doctor.
 - Point to "a doctor", "a hospital" or "a health worker" — not "your GP".
-- whatItMeasures: 1 sentence. whatYourResultMeans: 1-3 sentences, specific to this value.
+- plainName: 2-4 everyday words for what the test is about (e.g. "Oxygen-carrying protein", "Kidney waste level"). Do NOT repeat the test name or its abbreviation.
+- whatItMeasures: 1 sentence. whatYourResultMeans: 1-3 sentences, specific to this value. Use correct grammar ("an active", not "a active").
 - summary: 2-3 sentences covering the overall picture.
 - questionsForDoctor: 3-5 short, specific questions the person can ask about THESE results.
 - Return one tests entry for every input test, using the same id.`;

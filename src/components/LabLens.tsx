@@ -22,6 +22,18 @@ const STATUS_STYLE: Record<Status, { label: string; chip: string }> = {
 
 /* ---------- helpers ---------- */
 
+const SUP: Record<string, string> = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+
+/** "x10^9/L" -> "×10⁹/L", "umol/L" -> "µmol/L" */
+function prettyUnit(u: string | null): string {
+  if (!u) return "";
+  return u
+    .replace(/^x\s?10/i, "×10")
+    .replace(/\^(\d+)/g, (_, d: string) => d.split("").map((c) => SUP[c]).join(""))
+    .replace(/\bumol/i, "µmol")
+    .replace(/\bul\b/i, "µL");
+}
+
 async function postAnalyze(fd: FormData): Promise<AnalyzeResponse> {
   let res: Response;
   try {
@@ -72,7 +84,7 @@ function shareText(r: AnalyzeResponse): string {
   if (flagged.length) {
     lines.push("To discuss:");
     for (const t of flagged) {
-      lines.push(`• ${byId.get(t.id)?.plainName ?? t.name}: ${t.valueText}${t.unit ? " " + t.unit : ""} (${STATUS_STYLE[t.status].label}${t.critical ? ", URGENT" : ""})`);
+      lines.push(`• ${byId.get(t.id)?.plainName ?? t.name}: ${t.valueText}${t.unit ? " " + prettyUnit(t.unit) : ""} (${STATUS_STYLE[t.status].label}${t.critical ? ", URGENT" : ""})`);
     }
     lines.push("");
   }
@@ -488,7 +500,7 @@ function TestCard({ test, exp }: { test: FlaggedTest; exp?: TestExplanation }) {
 
       <p className="mt-3 font-display text-3xl">
         {test.valueText}
-        {test.unit && <span className="ml-1 font-sans text-base text-muted">{test.unit}</span>}
+        {test.unit && <span className="ml-1.5 font-sans text-base text-muted">{prettyUnit(test.unit)}</span>}
       </p>
 
       {test.position !== null ? (
