@@ -1,4 +1,4 @@
-import { Budget, BusyError, extractReport, explainResults } from "@/lib/gemini";
+import { Budget, BusyError, QuotaError, extractReport, explainResults } from "@/lib/gemini";
 import { flagTests, sortTests } from "@/lib/flags";
 import type { AnalyzeResponse, Extraction, Language } from "@/lib/types";
 import { LANGUAGES } from "@/lib/types";
@@ -64,11 +64,12 @@ export async function POST(req: Request) {
     return Response.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     console.error("[analyze]", err);
+    if (err instanceof QuotaError)
+      return error("Our free AI allowance is used up for now. Please try again later.", 429);
     if (err instanceof BusyError)
       return error("The AI is very busy right now. Please try again in a minute.", 503);
     const msg = String((err as Error)?.message ?? "");
     if (/GEMINI_API_KEY/.test(msg)) return error("Server is missing its Gemini API key.", 500);
-    if (/429|quota|rate/i.test(msg)) return error("Too many requests right now. Wait a minute and try again.", 429);
     if (/503|UNAVAILABLE|high demand|overloaded/i.test(msg))
       return error("The AI is very busy right now. Please try again in a minute.", 503);
     return error("Something went wrong reading the report. Please try again.", 500);

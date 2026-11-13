@@ -2,12 +2,50 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import type { Explanation, Extraction, FlaggedTest, Language } from "./types";
 import { LANGUAGES } from "./types";
 
-const MODELS = [
-  process.env.GEMINI_MODEL,
-  "gemini-3.8-flash",
-  "gemini-flash-latest",
-  "gemini-flash-lite-latest",
-].filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
+// Used only if listing models fails
+const FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-flash-latest"];
+
+const SKIP = /image|tts|audio|live|embed|vision-preview|robotics|computer|native|exp-|learnlm|gemma/i;
+
+function versionOf(name: string): number {
+  const m = name.match(/gemini-(\d+(?:\.\d+)?)/);
+  return m ? parseFloat(m[1]) : 0;
+}
+
+let cachedModels: string[] | null = null;
+
+/**
+ * Ask Google which models THIS key can actually use, instead of guessing
+ * names. Order: GEMINI_MODEL env, then newest Flash, then Flash-Lite.
+ */
+async function availableModels(ai: GoogleGenAI): Promise<string[]> {
+  if (cachedModels) return cachedModels;
+  const preferred = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : [];
+  try {
+    const found: string[] = [];
+    const pager = await ai.models.list({ config: { pageSize: 100 } });
+    for await (const m of pager) {
+      const name = (m.name ?? "").replace(/^models\//, "");
+      if (!name.includes("flash") || SKIP.test(name)) continue;
+      if (m.supportedActions && !m.supportedActions.includes("generateContent")) continue;
+      found.push(name);
+    }
+    found.sort((a, b) => {
+      const lite = Number(a.includes("lite")) - Number(b.includes("lite"));
+      if (lite !== 0) return lite; // full Flash before Lite
+      const pre = Number(/preview/.test(a)) - Number(/preview/.test(b));
+      if (pre !== 0) return pre; // stable before preview
+      return versionOf(b) - versionOf(a); // newest first
+    });
+    console.info("[gemini] models available to this key:", found.slice(0, 8).join(", "));
+    cachedModels = [...new Set([...preferred, ...found.slice(0, 4)])];
+    if (cachedModels.length === 0) cachedModels = [...preferred, ...FALLBACK_MODELS];
+  } catch (err) {
+    console.warn("[gemini] could not list models:", String((err as Error)?.message ?? err).slice(0, 200));
+    cachedModels = [...new Set([...preferred, ...FALLBACK_MODELS])];
+  }
+  return cachedModels;
+}
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -22,7 +60,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Model doesn't exist for this key -> skip straight to the next model
 const MISSING = /not found|404|is not supported|no longer available/i;
 // Rate limit or quota used up for this model
-const QUOTA = /429|RESOURCE_EXHAUSTED|quota/i;
+const QUOTA = /\b429\b|RESOURCE_EXHAUSTED|quota/i;
 // Busy / transient -> retry once, then fall back to the next model
 const BUSY = /503|500|UNAVAILABLE|overloaded|high demand|INTERNAL|deadline|timed? ?out|abort/i;
 
@@ -40,6 +78,12 @@ export class Budget {
   }
 }
 
+export class QuotaError extends Error {
+  constructor() {
+    super("Gemini quota used up");
+  }
+}
+
 export class BusyError extends Error {
   constructor() {
     super("AI busy (503)");
@@ -54,7 +98,9 @@ async function generateJson<T>(
 ): Promise<T> {
   const ai = client();
   let lastErr: unknown;
-  for (const model of MODELS) {
+  const models = await availableModels(ai);
+  const failures: string[] = [];
+  for (const model of models) {
     let useThinking = true;
     for (let attempt = 0; attempt < 2; attempt++) {
       // Need at least ~8s to make a call worth trying
@@ -79,9 +125,9 @@ async function generateJson<T>(
       } catch (err) {
         lastErr = err;
         const msg = String((err as Error)?.message ?? err);
+        failures.push(`${model}: ${msg.slice(0, 160)}`);
         if (MISSING.test(msg)) break; // next model
         if (QUOTA.test(msg)) {
-          console.warn(`[gemini] ${model} quota/rate limit, trying next model`);
           break; // each model has its own free-tier quota
         }
         if (useThinking && /thinking/i.test(msg)) {
@@ -97,6 +143,8 @@ async function generateJson<T>(
       }
     }
   }
+  console.error("[gemini] all models failed:\n" + failures.join("\n"));
+  if (failures.some((f) => QUOTA.test(f))) throw new QuotaError();
   if (lastErr && BUSY.test(String((lastErr as Error)?.message ?? lastErr))) throw new BusyError();
   throw lastErr;
 }
