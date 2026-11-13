@@ -1,4 +1,4 @@
-import { Budget, BusyError, QuotaError, extractReport, explainResults } from "@/lib/gemini";
+import { Budget, BusyError, QuotaError, extractReport, explainResults } from "@/lib/ai";
 import { flagTests, sortTests } from "@/lib/flags";
 import type { AnalyzeResponse, Extraction, Language } from "@/lib/types";
 import { LANGUAGES } from "@/lib/types";

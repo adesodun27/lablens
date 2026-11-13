@@ -90,7 +90,7 @@ export class BusyError extends Error {
   }
 }
 
-async function generateJson<T>(
+async function geminiJson<T>(
   parts: Part[],
   schema: object,
   system: string,
@@ -147,6 +147,135 @@ async function generateJson<T>(
   if (failures.some((f) => QUOTA.test(f))) throw new QuotaError();
   if (lastErr && BUSY.test(String((lastErr as Error)?.message ?? lastErr))) throw new BusyError();
   throw lastErr;
+}
+
+/* ---------------- Backup providers (free, OpenAI-compatible) ---------------- */
+
+interface Compat {
+  name: string;
+  url: string;
+  key: string | undefined;
+  model: string;
+  jsonMode: boolean;
+}
+
+function compatProviders(): Compat[] {
+  return [
+    {
+      name: "groq",
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      key: process.env.GROQ_API_KEY,
+      model: process.env.GROQ_MODEL || "qwen/qwen3.6-27b",
+      jsonMode: true,
+    },
+    {
+      name: "openrouter",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      key: process.env.OPENROUTER_API_KEY,
+      model: process.env.OPENROUTER_MODEL || "openrouter/free",
+      jsonMode: false,
+    },
+  ].filter((p) => !!p.key);
+}
+
+/** Pull the JSON object out of a reply that may include <think> blocks or ``` fences. */
+function parseLooseJson<T>(text: string): T {
+  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/```(?:json)?/gi, "");
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end <= start) throw new SyntaxError("No JSON in reply");
+  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+}
+
+async function compatJson<T>(
+  p: Compat,
+  parts: Part[],
+  schema: object,
+  system: string,
+  budget: Budget,
+): Promise<T> {
+  if (parts.some((x) => "inlineData" in x && x.inlineData.mimeType === "application/pdf")) {
+    throw new Error(`${p.name} can't read PDFs (unsupported)`);
+  }
+  if (budget.left() < 8000) throw new BusyError();
+  const content = parts.map((x) =>
+    "text" in x
+      ? { type: "text", text: x.text }
+      : { type: "image_url", image_url: { url: `data:${x.inlineData.mimeType};base64,${x.inlineData.data}` } },
+  );
+  const res = await fetch(p.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(Math.min(budget.left() - 2000, 45000)),
+    body: JSON.stringify({
+      model: p.model,
+      temperature: 0.2,
+      ...(p.jsonMode ? { response_format: { type: "json_object" } } : {}),
+      messages: [
+        {
+          role: "system",
+          content: `${system}\n\nReply with ONLY a JSON object matching this JSON Schema, no other text:\n${JSON.stringify(schema)}`,
+        },
+        { role: "user", content },
+      ],
+    }),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`${p.name} ${res.status}: ${body.slice(0, 200)}`);
+  const text = JSON.parse(body)?.choices?.[0]?.message?.content ?? "";
+  return parseLooseJson<T>(text);
+}
+
+let geminiCooldownUntil = 0;
+
+/**
+ * Try every configured AI in turn: Gemini first, then Groq, then OpenRouter.
+ * A free tier being busy or used up on one no longer breaks the app.
+ */
+async function generateJson<T>(
+  parts: Part[],
+  schema: object,
+  system: string,
+  budget: Budget,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const backups = compatProviders();
+  if (process.env.GEMINI_API_KEY && Date.now() > geminiCooldownUntil) {
+    // With backups configured, don't let Gemini eat the whole time budget
+    const gBudget = backups.length ? new Budget(Math.min(30_000, budget.left() - 25_000)) : budget;
+    try {
+      return await geminiJson<T>(parts, schema, system, gBudget);
+    } catch (err) {
+      errors.push(err);
+      if (backups.length) geminiCooldownUntil = Date.now() + 90_000; // skip it for a bit
+      console.warn("[ai] gemini failed:", String((err as Error)?.message ?? err).slice(0, 200));
+    }
+  }
+  for (let p of backups) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const out = await compatJson<T>(p, parts, schema, system, budget);
+        console.info(`[ai] answered by ${p.name} (${p.model})`);
+        return out;
+      } catch (err) {
+        errors.push(err);
+        const msg = String((err as Error)?.message ?? err);
+        console.warn(`[ai] ${p.name} failed:`, msg.slice(0, 200));
+        if (err instanceof BusyError) break;
+        if (p.jsonMode && /response_format|json_validate|json mode/i.test(msg)) {
+          p = { ...p, jsonMode: false }; // model doesn't like JSON mode; ask in plain text
+          continue;
+        }
+        if (!(err instanceof SyntaxError) && !BUSY.test(msg)) break; // only retry flaky replies
+      }
+    }
+  }
+  if (errors.length === 0) throw new Error("GEMINI_API_KEY is not set");
+  if (errors.some((e) => e instanceof QuotaError || QUOTA.test(String((e as Error)?.message)))) {
+    if (errors.every((e) => e instanceof QuotaError || QUOTA.test(String((e as Error)?.message))))
+      throw new QuotaError();
+  }
+  throw new BusyError();
 }
 
 /* ---------------- Step 1: read the report ---------------- */

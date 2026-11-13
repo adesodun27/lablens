@@ -21,11 +21,11 @@ In Nigeria, many people pay for a lab test and pick up the result themselves, of
 | Keeps your data | Nothing is stored. Files stay in memory for one request and personal identifiers are never extracted |
 
 ## Tech
-Next.js 16 (App Router) · TypeScript · Tailwind v4 · Google Gemini (`@google/genai`, structured JSON output, vision) · Vercel
+Next.js 16 (App Router) · TypeScript · Tailwind v4 · Google Gemini (`@google/genai`, structured JSON output, vision), with Groq and OpenRouter as free backups · Vercel
 
 ```
 src/lib/flags.ts        deterministic status + critical-value rules
-src/lib/gemini.ts       step 1 extract (vision) · step 2 explain (language)
+src/lib/ai.ts           step 1 extract (vision) · step 2 explain (language) · Gemini → Groq → OpenRouter fallback
 src/app/api/analyze     POST endpoint, no storage
 src/components/LabLens.tsx the whole UI
 public/sample-report.png fictional report for demos
@@ -34,13 +34,13 @@ public/sample-report.png fictional report for demos
 ## Run locally
 ```bash
 npm install
-cp .env.example .env.local   # add your GEMINI_API_KEY from https://aistudio.google.com/apikey
+cp .env.example .env.local   # add GEMINI_API_KEY and/or GROQ_API_KEY / OPENROUTER_API_KEY
 npm run dev
 ```
 `GEMINI_MOCK=1` runs the app with canned data and makes no API calls.
 
 ## Deploy
-Push to GitHub → import into Vercel → add `GEMINI_API_KEY` under Environment Variables → Deploy.
+Push to GitHub → import into Vercel → add `GEMINI_API_KEY` (and optionally `GROQ_API_KEY`, `OPENROUTER_API_KEY`) under Environment Variables → Deploy.
 
 ## Limitations and next steps
 - The critical thresholds come from commonly published lab critical-value lists and **need clinician review** before real-world use.
