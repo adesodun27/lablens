@@ -21,6 +21,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Model doesn't exist for this key -> skip straight to the next model
 const MISSING = /not found|404|is not supported|no longer available/i;
+// Rate limit or quota used up for this model
+const QUOTA = /429|RESOURCE_EXHAUSTED|quota/i;
 // Busy / transient -> retry once, then fall back to the next model
 const BUSY = /503|500|UNAVAILABLE|overloaded|high demand|INTERNAL|deadline|timed? ?out|abort/i;
 
@@ -78,6 +80,10 @@ async function generateJson<T>(
         lastErr = err;
         const msg = String((err as Error)?.message ?? err);
         if (MISSING.test(msg)) break; // next model
+        if (QUOTA.test(msg)) {
+          console.warn(`[gemini] ${model} quota/rate limit, trying next model`);
+          break; // each model has its own free-tier quota
+        }
         if (useThinking && /thinking/i.test(msg)) {
           useThinking = false; // model doesn't support thinkingLevel; retry without
           attempt--;
